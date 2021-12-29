@@ -2,9 +2,6 @@
 <html>
 <body>
 
-<h2>Transfer GeniaceNFT - Testnet</h2>
-
-
 
 <!-- <div>
 	<button onclick="getLatestBlock()" >Get Latest Block </button>
@@ -48,14 +45,28 @@
 <br/><br/>
 
 <div>
+  <h2>Transfer GeniaceNFT - Mainnet</h2>
   <!-- 0x54736a7d074d7816 -->
-	RECIPIENT ADDRESS:<textarea id='recipient'> </textarea><br>
-  TOKEN ID:<textarea id='tokenId'></textarea><br>
-	<button onclick="sendTransaction()" >Send Transaction</button>
+	RECIPIENT ADDRESS:<input type="text" id="recipient" name="address">
+  TOKEN ID:<input type="text" id="tokenId" name="tokenId">
+	<button onclick="sendGeniaceNFT()" >Send Transaction</button>
 	<div id='sendTransactionResponse'></div>
-    
+</div>
 
 
+<div>
+  <!-- 0x54736a7d074d7816 -->
+  <h2>Get geni balance - Mainnet</h2>
+	<button onclick="getGeniBalance()" >Get Geni Balance</button><p>   </p>
+	<div id='geniBalance'></div>
+</div>
+
+<div>
+  <h2>Transfer Geni - Mainnet</h2>
+  RECIPIENT ADDRESS: <input type="text" id="geniRecipient" name="address">
+  AMOUNT: <input type="text" id="geniAmount" name="amount">
+	<button onclick="transferGeni()" >Transfer Geni</button><br>
+	<div id='geniTransactionResponse'></div>
 </div>
 
 
@@ -64,12 +75,12 @@
 
 <script>
 window.fcl.config()
-  .put("accessNode.api", "https://access-testnet.onflow.org")
-  .put("challenge.handshake", "https://flow-wallet-testnet.blocto.app/authn") 
+  .put("accessNode.api", "https://access-mainnet-beta.onflow.org")
+  .put("challenge.handshake", "https://flow-wallet.blocto.app/authn") 
 
-const transactionScript = `
-import NonFungibleToken from 0x631e88ae7f1d7c20
-import GeniaceNFT from 0x99eb28310626e56a
+const transferGeniaceNFTTransactionScript = `
+import NonFungibleToken from 0x1d7e57aa55817448
+import GeniaceNFT from 0xabda6627c70c7f52
 
 // This transaction transfers a Geniace NFT from one account to another.
 
@@ -96,11 +107,71 @@ transaction(recipient: Address, withdrawID: UInt64) {
 
 `
 
+const getGeniBalanceScript = `
+import Geni from 0xabda6627c70c7f52
+import FungibleToken from 0xf233dcee88fe0abe
+
+// This script returns an account's Geni balance.
+
+pub fun main(address: Address): UFix64 {
+    let account = getAccount(address)
+    
+    let vaultRef = account.getCapability(Geni.BalancePublicPath)!.borrow<&Geni.Vault{FungibleToken.Balance}>()
+        ?? panic("Could not borrow Balance reference to the Vault")
+
+    return vaultRef.balance
+}
+`
+
+const transferGeniTransactionScript = `
+import FungibleToken from 0xf233dcee88fe0abe
+import Geni from 0xabda6627c70c7f52
+
+// This transaction is a template for a transaction that
+// could be used by anyone to send tokens to another account
+// that has been set up to receive tokens.
+//
+// The withdraw amount and the account from getAccount
+// would be the parameters to the transaction
+
+transaction(amount: UFix64, to: Address) {
+
+    // The Vault resource that holds the tokens that are being transferred
+    let sentVault: @FungibleToken.Vault
+
+    prepare(signer: AuthAccount) {
+
+        // Get a reference to the signer's stored vault
+        let vaultRef = signer.borrow<&Geni.Vault>(from: Geni.VaultStoragePath)
+			?? panic("Could not borrow reference to the owner's Vault!")
+
+        // Withdraw tokens from the signer's stored vault
+        self.sentVault <- vaultRef.withdraw(amount: amount)
+    }
+
+    execute {
+
+        // Get the recipient's public account object
+        let recipient = getAccount(to)
+
+        // Get a reference to the recipient's Receiver
+        let receiverRef = recipient.getCapability(Geni.ReceiverPublicPath)!.borrow<&{FungibleToken.Receiver}>()
+			?? panic("Could not borrow receiver reference to the recipient's Vault")
+
+        // Deposit the withdrawn tokens in the recipient's receiver
+        receiverRef.deposit(from: <-self.sentVault)
+    }
+}
+
+`
+
+var userAddrss = '';
+
 window.fcl.currentUser().subscribe(user => showUser({...user}))
 
 var showUser = function(user){
 	console.log(user);
-	
+      userAddrss = user.addr
 	    document.getElementById('loginResponse').innerText = JSON.stringify(user);
 }
 var getLatestBlock = async function() {
@@ -127,18 +198,34 @@ var runScript = async function() {
     document.getElementById('runScriptResponse').innerText = JSON.stringify(r);
 }
 
-var setStatus = function(status){
-    document.getElementById('sendTransactionResponse').innerText = status;
+var setStatus = function(status, id){
+    document.getElementById(id).innerText = status;
 }
 
-var sendTransaction = async function() {
+var getGeniBalance = async function() {
+  try{
+    const response = await window.fcl.send([
+      window.fcl.script(getGeniBalanceScript),
+      window.fcl.args([
+          window.fcl.arg(userAddrss, window.types.Address),
+        ])
+    ]);
+    var r  = await window.fcl.decode(response);
+
+    document.getElementById('geniBalance').innerText = JSON.stringify(r);
+
+  } catch(err){
+    document.getElementById('geniBalance').innerText = "0";
+  }
+    
+}
+
+var transferGeni = async function() {
     // const response = await window.fcl.send([
     //   window.fcl.script(document.getElementById('script').value),
     // ]);
-    console.log("recepient:",document.getElementById('recipient').value);
-    console.log("token Id:",document.getElementById('tokenId').value);
 
-    setStatus("Resolving...")
+    setStatus("Resolving...", "geniTransactionResponse")
 
     const blockResponse = await window.fcl.send([
       window.fcl.getLatestBlock(),
@@ -148,7 +235,55 @@ var sendTransaction = async function() {
 
     try {
       const { transactionId } = await window.fcl.send([
-        window.fcl.transaction(transactionScript),
+        window.fcl.transaction(transferGeniTransactionScript),
+        window.fcl.args([
+          window.fcl.arg(parseFloat(document.getElementById('geniAmount').value).toFixed(2), window.types.UFix64),
+          window.fcl.arg(document.getElementById('geniRecipient').value.trim(), window.types.Address)
+        ]),
+        window.fcl.proposer(window.fcl.currentUser().authorization),
+        window.fcl.authorizations([window.fcl.currentUser().authorization]),
+        window.fcl.payer(window.fcl.currentUser().authorization),
+        window.fcl.ref(block.id),
+        window.fcl.limit(9999),
+          ])
+
+      setStatus("Transaction sent, waiting for confirmation", "geniTransactionResponse")
+
+      const unsub = fcl
+        .tx({ transactionId })
+        .subscribe(transaction => {
+
+          if (window.fcl.tx.isSealed(transaction)) {
+            console.log("Transaction:",transaction);
+            setStatus("Transaction is Sealed", "geniTransactionResponse")
+            unsub()
+          }
+        })
+    } catch (error) {
+      console.error(error);
+      setStatus("Transaction failed", "geniTransactionResponse")
+    }
+ }
+
+
+var sendGeniaceNFT = async function() {
+    // const response = await window.fcl.send([
+    //   window.fcl.script(document.getElementById('script').value),
+    // ]);
+    console.log("recepient:",document.getElementById('recipient').value);
+    console.log("token Id:",document.getElementById('tokenId').value);
+
+    setStatus("Resolving...", "sendTransactionResponse")
+
+    const blockResponse = await window.fcl.send([
+      window.fcl.getLatestBlock(),
+    ])
+
+    const block = await window.fcl.decode(blockResponse)
+
+    try {
+      const { transactionId } = await window.fcl.send([
+        window.fcl.transaction(transferGeniaceNFTTransactionScript),
         window.fcl.args([
           window.fcl.arg(document.getElementById('recipient').value.trim(), window.types.Address),
           window.fcl.arg(parseInt(document.getElementById('tokenId').value), window.types.UInt64),
@@ -160,7 +295,7 @@ var sendTransaction = async function() {
         window.fcl.limit(9999),
           ])
 
-      setStatus("Transaction sent, waiting for confirmation")
+      setStatus("Transaction sent, waiting for confirmation", "sendTransactionResponse")
 
       const unsub = fcl
         .tx({ transactionId })
@@ -168,13 +303,13 @@ var sendTransaction = async function() {
 
           if (window.fcl.tx.isSealed(transaction)) {
             console.log("Transaction:",transaction);
-            setStatus("Transaction is Sealed")
+            setStatus("Transaction is Sealed", "sendTransactionResponse")
             unsub()
           }
         })
     } catch (error) {
       console.error(error);
-      setStatus("Transaction failed")
+      setStatus("Transaction failed", "sendTransactionResponse")
     }
  }
 
