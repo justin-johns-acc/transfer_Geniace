@@ -303,10 +303,16 @@ var sendGeniaceNFT = async function() {
 
           if (window.fcl.tx.isSealed(transaction)) {
             console.log("Transaction:",transaction);
+            if(transaction.errorMessage){
+              setStatus(`Transaction failed !\n Error: ${transaction.errorMessage}`, "sendTransactionResponse")
+              unsub()
+              return;
+            }
             setStatus("Transaction is Sealed", "sendTransactionResponse")
             unsub()
           }
         })
+      
     } catch (error) {
       console.error(error);
       setStatus("Transaction failed", "sendTransactionResponse")
