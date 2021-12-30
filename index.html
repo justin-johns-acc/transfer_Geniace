@@ -53,6 +53,19 @@
 	<div id='sendTransactionResponse'></div>
 </div>
 
+<div>
+  <h2>Transfer GeniaceNFT (Batch)- Mainnet</h2>
+  <p id="batchUploadLimit"></p>
+  <p><a href="sample.csv">Sample file</a></p>
+  <input type="file" id="fileUpload" />
+  <input type="button" id="upload" value="Upload" onclick="upload()" />
+  <hr />
+  <div id="dvCSV" style="max-height: 50vh; overflow-y: scroll"></div>
+  <br />
+  <button onclick="sendGeniaceNFTBatch()">Send Transaction</button>
+  <div id="sendTransactionResponseBatched"></div>
+</div>
+
 
 <div>
   <!-- 0x54736a7d074d7816 -->
@@ -74,6 +87,19 @@
 <script src="https://unpkg.com/@onflow/types@0.0.5/dist/types.umd.js"></script>
 
 <script>
+  var config = {
+        maxRows: 200,
+        colSize: 2,
+        recipientColName: "Recipients",
+        tokenIdColName: "TokenIDs",
+      };
+  var recipientList = [];
+  var tokenList = [];
+
+  document.getElementById(
+    "batchUploadLimit"
+  ).innerText = `max records/file: ${config.maxRows}`;
+
 window.fcl.config()
   .put("accessNode.api", "https://access-mainnet-beta.onflow.org")
   .put("challenge.handshake", "https://flow-wallet.blocto.app/authn") 
@@ -106,6 +132,41 @@ transaction(recipient: Address, withdrawID: UInt64) {
 }
 
 `
+
+const transferGeniaceNFTBatchTransactionScript = `
+    import NonFungibleToken from 0x1d7e57aa55817448
+    import GeniaceNFT from 0xabda6627c70c7f52
+
+    // This transaction transfers a Geniace NFT from one account to another.
+
+    transaction(recipients: [Address], withdrawIDs: [UInt64]) {
+        prepare(signer: AuthAccount) {
+
+            // borrow a reference to the signer's NFT collection
+            let collectionRef = signer.borrow<&GeniaceNFT.Collection>(from: GeniaceNFT.CollectionStoragePath)
+                ?? panic("Could not borrow a reference to the owner's collection")
+
+            var iter = 0
+            while iter < recipients.length {
+
+              // get the recipients public account object
+              var recipient = getAccount(recipients[iter])
+
+              // borrow a public reference to the receivers collection
+              var depositRef = recipient.getCapability(GeniaceNFT.CollectionPublicPath)!.borrow<&{NonFungibleToken.CollectionPublic}>()!
+
+              // withdraw the NFT from the owner's collection
+              var nft <- collectionRef.withdraw(withdrawID: withdrawIDs[iter])
+
+              // Deposit the NFT in the recipient's collection
+              depositRef.deposit(token: <-nft)
+
+              iter = iter + 1
+            }
+        }
+    }
+
+  `;
 
 const getGeniBalanceScript = `
 import Geni from 0xabda6627c70c7f52
@@ -315,9 +376,188 @@ var sendGeniaceNFT = async function() {
       
     } catch (error) {
       console.error(error);
-      setStatus("Transaction failed", "sendTransactionResponse")
+      setStatus(
+            `Transaction failed \n ${error}`,
+            "sendTransactionResponse"
+          );
     }
  }
+
+ var sendGeniaceNFTBatch = async function () {
+        setStatus("Resolving...", "sendTransactionResponseBatched");
+
+        const blockResponse = await window.fcl.send([
+          window.fcl.getLatestBlock(),
+        ]);
+
+        const block = await window.fcl.decode(blockResponse);
+
+        try {
+          const { transactionId } = await window.fcl.send([
+            window.fcl.transaction(transferGeniaceNFTBatchTransactionScript),
+            window.fcl.args([
+              window.fcl.arg(
+                recipientList,
+                window.types.Array(window.types.Address)
+              ),
+              window.fcl.arg(
+                tokenList,
+                window.types.Array(window.types.UInt64)
+              ),
+            ]),
+            window.fcl.proposer(window.fcl.currentUser().authorization),
+            window.fcl.authorizations([window.fcl.currentUser().authorization]),
+            window.fcl.payer(window.fcl.currentUser().authorization),
+            window.fcl.ref(block.id),
+            window.fcl.limit(9999),
+          ]);
+
+          setStatus(
+            "Transaction sent, waiting for confirmation",
+            "sendTransactionResponseBatched"
+          );
+
+          const unsub = fcl.tx({ transactionId }).subscribe((transaction) => {
+            if (window.fcl.tx.isSealed(transaction)) {
+              console.log("Transaction:", transaction);
+
+              if (transaction.errorMessage) {
+                setStatus(
+                  `Transaction failed !\n Error: ${transaction.errorMessage}`,
+                  "sendTransactionResponseBatched"
+                );
+                unsub();
+                return;
+              }
+
+              setStatus(
+                "Transaction is Sealed",
+                "sendTransactionResponseBatched"
+              );
+              unsub();
+            }
+          });
+        } catch (error) {
+          console.error(error);
+          setStatus(
+            `Transaction failed \n ${error}`,
+            "sendTransactionResponseBatched"
+          );
+        }
+        console.log(`recipients:${recipientList}\ntokens:${tokenList}`);
+      };
+
+      function resetParamsList() {
+        recipientList = [];
+        tokenList = [];
+      }
+
+      function validateAddress(address) {
+        pattern = /^(0x){0,1}[0-9a-fA-F]{16}$/g;
+        return pattern.test(address);
+      }
+
+      function validateTokenId(tokenId) {
+        return Number.isInteger(tokenId);
+      }
+
+      function isHeader(headerRow) {
+        let val = headerRow.split(",");
+        try {
+          if (
+            val[0].trim() == config.recipientColName &&
+            val[1].trim() == config.tokenIdColName
+          ) {
+            return true;
+          }
+          return false;
+        } catch (err) {
+          return false;
+        }
+      }
+
+    function upload() {
+      resetParamsList();
+
+      var fileUpload = document.getElementById("fileUpload");
+      var regex = /^([a-zA-Z0-9\s_\\.\-:])+(.csv|.txt)$/;
+      if (regex.test(fileUpload.value.toLowerCase())) {
+        if (typeof FileReader != "undefined") {
+          var reader = new FileReader();
+          reader.onload = function (e) {
+            var table = document.createElement("table");
+            table.style.border = "1px solid black"
+            var rows = e.target.result.split("\n");
+
+            if (rows[rows.length - 1] === "") {
+              rows.pop();
+            }
+
+            if(isHeader) {
+              rows = rows.slice(1);
+            }
+
+            if (rows.length > config.maxRows) {
+              alert(
+                `The number of records exceeds max value ${config.maxRows}.`
+              );
+              resetParamsList();
+              return;
+            }
+
+            // add header
+            var header = table.insertRow(-1);
+            var col1 = header.insertCell(-1);
+            col1.style.border = "1px solid black"
+            col1.innerHTML = config.recipientColName;
+            var col2 = header.insertCell(-1);
+            col2.style.border = "1px solid black"
+            col2.innerHTML = config.tokenIdColName;
+
+            for (var i = 0; i < rows.length; i++) {
+              var cells = rows[i].split(",");
+
+              if (cells.length != config.colSize) {
+                alert(`The number of colums are wrong`);
+                resetParamsList();
+                return;
+              }
+
+              if (cells.length > 1) {
+                var row = table.insertRow(-1);
+                for (var j = 0; j < cells.length; j++) {
+                  var cell = row.insertCell(-1);
+                  cell.style.border = "1px solid black"
+                  cell.innerHTML = cells[j];
+                }
+              }
+              if (!validateAddress(cells[0].trim())) {
+                alert(`Wrong address format at row ${i + 1}`);
+                resetParamsList();
+                return;
+              }
+
+              if (!validateTokenId(parseInt(cells[1]))) {
+                alert(`Token Id not an integer, row ${i + 1}`);
+                resetParamsList();
+                return;
+              }
+
+              recipientList.push(cells[0].trim());
+              tokenList.push(parseInt(cells[1]));
+            }
+            var dvCSV = document.getElementById("dvCSV");
+            dvCSV.innerHTML = "";
+            dvCSV.appendChild(table);
+          };
+          reader.readAsText(fileUpload.files[0]);
+        } else {
+          alert("This browser does not support HTML5.");
+        }
+      } else {
+        alert("Please upload a valid CSV file.");
+      }
+    }
 
 
 </script>
