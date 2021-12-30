@@ -384,6 +384,10 @@ var sendGeniaceNFT = async function() {
  }
 
  var sendGeniaceNFTBatch = async function () {
+      if (!(recipientList.length && tokenList.length)) {
+              alert("Please upload a file.");
+              return;
+        }
         setStatus("Resolving...", "sendTransactionResponseBatched");
 
         const blockResponse = await window.fcl.send([
